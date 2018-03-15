@@ -1,0 +1,53 @@
+
+# function to find nearest met site 
+library(worldmet)
+library(dplyr)
+library(purrr)
+library(tidyverse)
+library(ropenaq)
+
+# read locations - fix numeric
+#locations <- read.csv("locations.csv", stringsAsFactors = FALSE)
+#locations<-read_rds("C:/Users/rpeltier/Desktop/Upwork Drafts/locations.RDS") 
+#remove(locations)
+locations<-aq_locations()
+
+locations$latitude <- as.numeric(locations$latitude)
+locations$longitude <- as.numeric(locations$longitude)
+
+# get locations of met sites
+meta <- getMeta(returnMap = FALSE, plot = FALSE)
+
+## approximate distance to site using Great Circle distances
+
+findDist <- function(lat, lon) {
+  if (!missing(lat) && !missing(lon)) {
+    r <- 6371 # radius of the Earth
+    
+    ## Coordinates need to be in radians
+    meta$longR <- meta$longitude * pi / 180
+    meta$latR <- meta$latitude * pi / 180
+    LON <- lon * pi / 180
+    LAT <- lat * pi / 180
+    meta$dist <- acos(sin(LAT) * sin(meta$latR) + cos(LAT) * 
+                        cos(meta$latR) * cos(meta$longR - LON)) * r
+    
+    ## sort and retrun top n nearest
+    meta <- head(openair:::sortDataFrame(meta, key = "dist"), 1)
+  
+    result <- select(meta, code = code, distance = dist, station = STATION)
+    
+  } else {
+    result <- data.frame(code = meta$code, distance = NA, station = NA)
+  }
+  return(result)
+}
+
+# go through AQ sites
+nearest <- map2_dfr(locations$latitude, locations$longitude, findDist)
+locations <- bind_cols(locations, nearest)
+#locations$location <- gsub( " " , "+" , locations$location)
+locations$distance<-round(locations$distance, 2)
+saveRDS(locations,"~/OAL/locations.RDS")
+remove('meta')
+remove('nearest')
