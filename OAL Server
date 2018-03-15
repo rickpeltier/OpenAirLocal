@@ -1,0 +1,196 @@
+
+# load packages
+#library(utilr)
+library(openair)
+library(dplyr)
+library(ggplot2)
+library(shiny)
+#library(gissr)
+library(ropenaq)
+library(worldmet)
+library(lubridate)
+library(leaflet)
+library(shinythemes)
+
+#######NICE TO HAVE#######
+#Persistent log that tracks user pollutant choices and location choice
+#ActionButton press automatically switches to second tab
+#better UI design for output, including titles above each graph.
+#Desriptive statistics table to include: max, min, median, mean of 'value', NaNs, and total number of measurements computed.
+#SQL call instead of API
+#remove requirement to gsub " " for "+"
+# Change download buttons to checkbox plus a single 'download all selections' action button
+###########################
+
+
+
+#options(shiny.reactlog=TRUE)  #debugging
+
+#reads locations.RDS, which contains the twice-weekly update list of all openaq locations
+locations<-readRDS("locations.RDS")
+
+shinyServer(function(input, output, session) {
+
+  
+  #  locations$location <- gsub( " " , "+" , locations$location)
+  
+  output$pollutant<-renderUI({  #selectinput based on pollutant chocies in locations columns
+    selectInput("pollutant", label = h4("Choose Pollutant"), 
+                choices = colnames(locations[,11:17]), 
+                selected = 1)
+  })
+  
+  output$pol  <- renderText({ #creates merged text on output
+    temp <- locations %>% filter(longitude == input$map_marker_click$lng)
+    paste("Data retrieved from OpenAQ and output processed at", Sys.time(),"GMT. Meteorology data is
+extracted from NOAA IDC dataset", as.character(temp$code),", a weather monitoring site", as.character(temp$distance)," km from the air quality monitoring site.
+          User-selected location and timeframe includes data from",as.character(temp$location),"in",as.character(temp$city) ,",",as.character(temp$country)
+          ,", which was collected by", as.character(temp$sourceNames), ". Site coordinates for this sampling
+          station are",as.character(temp$latitude) ,",",as.character(temp$longitude) , "W. This report shows
+          information on",as.character(input$pollutant),"measured between",as.character(input$dat3)  ,"and",as.character(input$dat4) ,".  All dates and 
+          times listed here are GMT.")
+  }) 
+   
+    output$map <- renderLeaflet({  #render leaflet map, populated by sites described in locations dataframe.  Reactive to selectinput "pollutant"
+      leaflet(subset(locations,(locations[,input$pollutant]=="TRUE")))%>% addTiles() %>%
+        addMarkers(lng = subset(locations,(locations[,input$pollutant]=="TRUE"))$longitude, lat = subset(locations,(locations[,input$pollutant]=="TRUE"))$latitude,
+                   popup = paste("Location:", subset(locations,(locations[,input$pollutant]=="TRUE"))$location, "<br>",
+                                 "Pollutant Choice:", input$pollutant, "<br>",
+                                 "First Date Available:", subset(locations,(locations[,input$pollutant]=="TRUE"))$firstUpdated, "<br>",
+                                 "Last Date Available:", subset(locations,(locations[,input$pollutant]=="TRUE"))$lastUpdated
+                   ))
+    })
+    
+    
+  #this waits for the submit button to be pressed by user.  This is mainly to reduce unneccessary network bandwidth.  rt is the reactive function
+    # that is piped to openair functions later.
+     rt<-(eventReactive(input$go, {
+ 
+     
+     # creates dataframes, called 'temp', "AQ", and "met".  AQ and met receive air quality data by API calls, and temp receives the merged output of the
+     #two.  temp is then passed to the rest of the functions for analysis.
+     temp <- locations %>% filter(longitude == input$map_marker_click$lng)
+     
+     met <- importNOAA(code =temp$code ,year = format(as.Date(temp$firstUpdated, format="%Y/%m/%d %H:%M:%S"),"%Y"):format(as.Date(temp$lastUpdated, format="%Y/%m/%d %H:%M:%S"),"%Y"))
+    
+     ###########Below is the original statement that calls openaq to get data by API.
+     AQ<-aq_measurements(location = temp$location, parameter = input$pollutant, date_from = as_date(temp$firstUpdated),date_to = as_date(temp$lastUpdated))
+    
+     
+     
+      ########################################################################
+# #      # Code to poll SQL data
+#       mydb <- dbConnect(RSQLite::SQLite(), "~/ParseClean/my-db.sqlite")
+#      #
+#        AQ<-dbGetQuery(mydb, 
+#           paste0("
+#                 SELECT *
+#                 FROM   openaq
+#                 WHERE  V3 = '",temp$location,"'
+#                 AND    V2 = '",input$pollutant,"'
+#                 AND    V1 > '",as.date(temp$firstUpdated),"'
+#                 AND    V1 < '",as.date(temp$lastUpdated),"';")
+# 
+#                 )
+#      #******Need to add security code to reduce SQL injection risk
+     # ######################################################################
+     
+     
+        colnames(AQ)[9] <- "date"  #change column to 'date' which matches output in met file for eventual merging
+     ##above as column 9 with API call to openAQ, or 1 with SQL call
+
+     merged<-merge(AQ, met, by="date")  #merge files together for delivery to openair output
+     
+     # merged$location <- gsub( " " , "+" , merged$location) # a little tidying up
+     # merged
+      
+      
+    })
+   
+
+     )
+  #User date selections here.  
+   output$dt3<-renderUI({
+     
+     dateInput('dat3',
+               label = 'Select Start Date',
+               value = "2000-01-01" 
+     )           
+     
+     
+   })
+   
+   output$dt4<-renderUI({
+     
+     dateInput('dat4',
+               label = 'Select End Date',
+               value = Sys.Date()
+     )           
+   })
+   
+
+   
+   ##########################
+   # output$summ = renderTable({
+   # 
+   #  output$merged
+   #    # #       
+   # })
+   ###########################
+  
+   # renders on-screen graphics x 5.      
+   output$tim = renderPlot({
+    
+          timeVariation(rt(), pollutant="value", name.pol = input$pollutant)
+          # %>% filter(as_date(date) >= input$dat3, as_date(date) <= input$dat4),
+   })
+   
+   output$polv = renderPlot({
+     polarPlot(rt(), pollutant = "value", upper = 20)
+   })
+   output$win = renderPlot({
+     windRose(rt(),key.footer = "knots")
+   })
+   output$cal = renderPlot({
+     calendarPlot(rt(), pollutant = "value", annotate = "value", main = "Daily averaged concentration") 
+   })
+   output$ser = renderPlot({
+     timePlot(rt(), pollutant = "value", name.pol = input$pollutant) 
+   })
+   
+   #this renders the same graphics as on-screen, but only when requested as a PDF download.
+   
+   output$plots <- downloadHandler(
+     filename = function() {
+       "Rplots.pdf"
+     },
+     content = function(file) {
+       pdf(file)
+        timeVariation(rt() %>%
+                              filter(as_date(date) >= input$dat3, as_date(date) <= input$dat4),pollutant="value")
+       
+        polarPlot(rt() %>%
+                               filter(as_date(date) >= input$dat3, as_date(date) <= input$dat4), pollutant = "value", smooth  =TRUE) 
+        windRose(rt() %>%
+                         filter(as_date(date) >= input$dat3, as_date(date) <= input$dat4),key.footer = "knots") 
+        calendarPlot(rt() %>%
+                             filter(as_date(date) >= input$dat3, as_date(date) <= input$dat4), pollutant = "value")    
+        timePlot(rt() %>%
+                         filter(as_date(date) >= input$dat3, as_date(date) <= input$dat4), pollutant = "value")  
+       dev.off()
+     }
+   )
+   
+   #this renders a downloadable .csv file for the user from the selected dataset.  It includes all variables.
+   output$merged <- downloadHandler(
+     filename = function() {
+       paste("file", ".csv", sep = "")
+     },
+     content = function(file) {
+       write.csv(rt(), file, row.names = FALSE)
+     }
+   )
+    
+})
+
+
