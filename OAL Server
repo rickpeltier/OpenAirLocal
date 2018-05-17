@@ -1,196 +1,386 @@
-
 # load packages
-#library(utilr)
 library(openair)
 library(dplyr)
-library(ggplot2)
 library(shiny)
-#library(gissr)
-library(ropenaq)
 library(worldmet)
 library(lubridate)
 library(leaflet)
 library(shinythemes)
+library(RSQLite)
+library(dygraphs)
+library(xts)
+library(shinydashboard)
+library(latticeExtra)
 
-#######NICE TO HAVE#######
-#Persistent log that tracks user pollutant choices and location choice
-#ActionButton press automatically switches to second tab
-#better UI design for output, including titles above each graph.
-#Desriptive statistics table to include: max, min, median, mean of 'value', NaNs, and total number of measurements computed.
-#SQL call instead of API
-#remove requirement to gsub " " for "+"
-# Change download buttons to checkbox plus a single 'download all selections' action button
-###########################
-
-
-
-#options(shiny.reactlog=TRUE)  #debugging
-
-#reads locations.RDS, which contains the twice-weekly update list of all openaq locations
-locations<-readRDS("locations.RDS")
+#reads locations.RDS, which contains the ~twice-weekly update list of all openaq locations
+locations <- readRDS("locations.RDS")
 
 shinyServer(function(input, output, session) {
+#########################
+#setwd("~/OAL/") # local use only
+setwd("/srv/shiny-server/OAL/")  #EC2 instance only
+##########################
+  output$pollutant <- renderUI({ # selectinput based on pollutant chocies in locations columns
+    selectInput("pollutant",
+      label = h4("1) Choose Pollutant"),
+      choices = colnames(locations[, 12:18]),
+      selected = 1
+    )
+  })
 
+  # renders leaflet maps based on monitoring locations and pollutants from locations.RDS; allows user to select parameters
+  output$map <- renderLeaflet({ 
+     data_select <- locations[locations[[input$pollutant]] == TRUE, ] #user-chosen location on map
+     
+     leaflet(data_select) %>%
+        addTiles() %>%
+        addMarkers(
+           lng = data_select$longitude, 
+           lat = data_select$latitude,
+           popup = paste(
+              "Location:", data_select$location, "<br>",
+              "Pollutant Choice:", input$pollutant, "<br>",
+              "First Date Available:", data_select$firstUpdated, "<br>",
+              "Last Date Available:", data_select$lastUpdated
+           ), 
+           clusterOptions = markerClusterOptions()
+        )
+  })
+    {observeEvent(input$go, {  #switch panels to 'output' when submit button pressed
+     updateTabsetPanel(session, "inTabset",
+                      selected = "Output_panel")
+  })
+  }
+  # input$go waits for the submit button to be pressed by user to reduce unneccessary network bandwidth
+  rt <- (eventReactive(input$go, { #main data fetching and processing
+     temp <- locations %>%
+      filter(longitude == input$map_marker_click$lng)
+
+   # import met data for site and year(s). 
+   met <- importNOAA(code = temp$code, PWC = FALSE, parallel = FALSE, year = year(input$dat3):year(input$dat4))
+   
+   if (sum(is.na(met$ws))/nrow(met) > 0.5) #flag sites where more than 50% of ws measurements are NA, write to file
+       {missing_met<-list(as.character(temp$code), 
+                          as.character(input$dat3), 
+                          as.character(input$dat4),
+                          as.character(Sys.time()))
+       missing_met<-t(missing_met)
+        write.table(missing_met, "log/missing_met.csv", row.names = FALSE,
+                    col.names = TRUE,
+                    append = TRUE,
+                    quote = FALSE,
+                    sep = ",")
+        }
+
+  # connect to database
+    mydb <- dbConnect(RSQLite::SQLite(), "my-db.sqlite")
+
+    sql_str <- paste0(
+      "SELECT * FROM openaq WHERE sql_location = '", temp$location,"' AND sql_pollutant = 
+      '",input$pollutant, "' AND sql_time >= '",input$dat3,"' AND sql_time <= '",input$dat4,"'", sep = "")
+
+    #build a use tracking log
+    tracklog<- list(as.character(Sys.time()), input$pollutant, 
+                    as.character(input$dat3), 
+                    as.character(input$dat4), 
+                    as.character(temp$location), 
+                    as.character(temp$latitude), 
+                    as.character(temp$longitude))
+    tracklog<-t(tracklog)
+    write.table(tracklog, "log/user_input.csv", 
+                row.names = FALSE,
+                col.names = FALSE,
+                append = TRUE,
+                quote = FALSE,
+                sep = ",")   
+    
+    #AQ is frame that contains selected AQ data polled from SQL database
+    AQ <- dbGetQuery(mydb, sql_str)
+    
+    #tidy up AQ
+    AQ <- rename(AQ,
+      date = sql_time,
+      value = sql_value
+    ) %>%
+      mutate(date = ymd_hms(date))
+
+    #calc difference in user time selections, expand timebase, merge AQ onto expanded timebase to include NA values
+    start_date_calc<-format(input$dat3) 
+    end_date_calc <- format(input$dat4)
+    # # 
+    num_hours<-difftime(end_date_calc, start_date_calc, units = "hours")
+    expand_timebase = data.frame(date = seq(as.POSIXct(start_date_calc), by = "hours", length =  num_hours))
+    # # 
+    AQ<-left_join(expand_timebase, AQ, by = "date")                                       
+                                       
+    print(head(AQ)) #local debugging
+    
+    #a little QA to remove highly negative values in dataset.
+    AQ$value[AQ$value <= -10] <- NA
+    
+    #merge AQ and met data by 'date'
+    merged <- left_join(AQ, met, by = "date")
+    
+    merged <- mutate(merged, date_utc = merged$date, #add columns for local and utc times, adjust local based on actual timezone
+               date_local = with_tz(merged$date, tz = temp$timezone)) 
+    
+    if (input$timeshift==FALSE) #adjust time zone to local/utc as selected by user
+    {merged$date<-merged$date_utc}
+
+    else if (input$timeshift == TRUE)
+    {merged$date<-merged$date_local}
+    
+    return(merged)
+  }
+)) #close of main data processing function, resulting in rt() as the main data function.
   
-  #  locations$location <- gsub( " " , "+" , locations$location)
   
-  output$pollutant<-renderUI({  #selectinput based on pollutant chocies in locations columns
-    selectInput("pollutant", label = h4("Choose Pollutant"), 
-                choices = colnames(locations[,11:17]), 
-                selected = 1)
+  #build user input and information output widgets.
+  output$pol <- renderText({ # creates merged text for output description header
+    temp <- locations %>% 
+      filter(longitude == input$map_marker_click$lng)
+    paste(h5(
+      "Data retrieved from OpenAQ and output processed at", Sys.time(), "GMT. Meteorology data is
+extracted from NOAA ISD dataset from site code", as.character(temp$code), ", (",as.character(temp$station),"), a weather monitoring site", as.character(temp$distance1), " km from the air quality monitoring site.
+          User-selected location and timeframe includes data from", as.character(temp$location), "in", as.character(temp$city), ",", as.character(temp$country)
+      , ", which was collected by", as.character(temp$sourceNames), ". Site coordinates for this sampling
+          station are", as.character(temp$latitude), ",", as.character(temp$longitude), "W. This report shows
+          information on", as.character(input$pollutant), "measured between", as.character(input$dat3), "and", as.character(input$dat4), ".  All dates and 
+          times listed here are at ", if (input$timeshift==FALSE){"UTC"} else if (input$timeshift == TRUE) {"local time"},"."
+    ))
   })
   
-  output$pol  <- renderText({ #creates merged text on output
-    temp <- locations %>% filter(longitude == input$map_marker_click$lng)
-    paste("Data retrieved from OpenAQ and output processed at", Sys.time(),"GMT. Meteorology data is
-extracted from NOAA IDC dataset", as.character(temp$code),", a weather monitoring site", as.character(temp$distance)," km from the air quality monitoring site.
-          User-selected location and timeframe includes data from",as.character(temp$location),"in",as.character(temp$city) ,",",as.character(temp$country)
-          ,", which was collected by", as.character(temp$sourceNames), ". Site coordinates for this sampling
-          station are",as.character(temp$latitude) ,",",as.character(temp$longitude) , "W. This report shows
-          information on",as.character(input$pollutant),"measured between",as.character(input$dat3)  ,"and",as.character(input$dat4) ,".  All dates and 
-          times listed here are GMT.")
-  }) 
-   
-    output$map <- renderLeaflet({  #render leaflet map, populated by sites described in locations dataframe.  Reactive to selectinput "pollutant"
-      leaflet(subset(locations,(locations[,input$pollutant]=="TRUE")))%>% addTiles() %>%
-        addMarkers(lng = subset(locations,(locations[,input$pollutant]=="TRUE"))$longitude, lat = subset(locations,(locations[,input$pollutant]=="TRUE"))$latitude,
-                   popup = paste("Location:", subset(locations,(locations[,input$pollutant]=="TRUE"))$location, "<br>",
-                                 "Pollutant Choice:", input$pollutant, "<br>",
-                                 "First Date Available:", subset(locations,(locations[,input$pollutant]=="TRUE"))$firstUpdated, "<br>",
-                                 "Last Date Available:", subset(locations,(locations[,input$pollutant]=="TRUE"))$lastUpdated
-                   ))
-    })
-    
-    
-  #this waits for the submit button to be pressed by user.  This is mainly to reduce unneccessary network bandwidth.  rt is the reactive function
-    # that is piped to openair functions later.
-     rt<-(eventReactive(input$go, {
- 
-     
-     # creates dataframes, called 'temp', "AQ", and "met".  AQ and met receive air quality data by API calls, and temp receives the merged output of the
-     #two.  temp is then passed to the rest of the functions for analysis.
-     temp <- locations %>% filter(longitude == input$map_marker_click$lng)
-     
-     met <- importNOAA(code =temp$code ,year = format(as.Date(temp$firstUpdated, format="%Y/%m/%d %H:%M:%S"),"%Y"):format(as.Date(temp$lastUpdated, format="%Y/%m/%d %H:%M:%S"),"%Y"))
-    
-     ###########Below is the original statement that calls openaq to get data by API.
-     AQ<-aq_measurements(location = temp$location, parameter = input$pollutant, date_from = as_date(temp$firstUpdated),date_to = as_date(temp$lastUpdated))
-    
-     
-     
-      ########################################################################
-# #      # Code to poll SQL data
-#       mydb <- dbConnect(RSQLite::SQLite(), "~/ParseClean/my-db.sqlite")
-#      #
-#        AQ<-dbGetQuery(mydb, 
-#           paste0("
-#                 SELECT *
-#                 FROM   openaq
-#                 WHERE  V3 = '",temp$location,"'
-#                 AND    V2 = '",input$pollutant,"'
-#                 AND    V1 > '",as.date(temp$firstUpdated),"'
-#                 AND    V1 < '",as.date(temp$lastUpdated),"';")
-# 
-#                 )
-#      #******Need to add security code to reduce SQL injection risk
-     # ######################################################################
-     
-     
-        colnames(AQ)[9] <- "date"  #change column to 'date' which matches output in met file for eventual merging
-     ##above as column 9 with API call to openAQ, or 1 with SQL call
-
-     merged<-merge(AQ, met, by="date")  #merge files together for delivery to openair output
-     
-     # merged$location <- gsub( " " , "+" , merged$location) # a little tidying up
-     # merged
-      
-      
-    })
-   
-
-     )
-  #User date selections here.  
-   output$dt3<-renderUI({
-     
-     dateInput('dat3',
-               label = 'Select Start Date',
-               value = "2000-01-01" 
-     )           
-     
-     
-   })
-   
-   output$dt4<-renderUI({
-     
-     dateInput('dat4',
-               label = 'Select End Date',
-               value = Sys.Date()
-     )           
-   })
-   
-
-   
-   ##########################
-   # output$summ = renderTable({
-   # 
-   #  output$merged
-   #    # #       
-   # })
-   ###########################
+  output$userlocationchoice <- renderText({
+    temp <- locations %>%
+      filter(longitude == input$map_marker_click$lng)
+    paste(as.character(temp$location))
+  })
   
-   # renders on-screen graphics x 5.      
-   output$tim = renderPlot({
+  
+  #experimental time shifting feature to shift to local time
+  output$timeshift <-renderUI({
+    checkboxInput("timeshift", " Click to report data as local time (otherwise, data is at UTC)", value = FALSE)
+  })
+  
+  # User date selections here.
+  output$dt3 <- renderUI({
+    dateInput("dat3",
+      label = "Select Start Date",
+      value = "2016-06-01"
+    )
+  })
+
+  output$dt4 <- renderUI({
+    dateInput("dat4",
+      label = "Select End Date",
+      value = Sys.Date()-10,
+      max = Sys.Date()-2
+    )
+  })
+
+  # create descriptive statistics and track logs.
+  summary_table <-reactive({ 
+     descriptive<- list( #build a descriptive statistics frame to go to the UI
+      mean(rt()$value, na.rm=TRUE), 
+      median(rt()$value, na.rm=TRUE), 
+      sd(rt()$value, na.rm=TRUE), 
+      max(rt()$value, na.rm=TRUE), 
+      min(rt()$value, na.rm=TRUE), 
+      sum(is.na(rt()$value)),
+      nrow(rt()),
+      mean(rt()$air_temp, na.rm=TRUE),
+      mean(rt()$RH, na.rm=TRUE))
+        names(descriptive)<-c("Mean Conc", "Median Conc", "Std Dev", "Max Conc", "Min Conc",  "NaNs", "Count", "Mean Temp", "RH")
+          write.csv(descriptive, "log/descriptive.csv", row.names = FALSE) #save descriptives as a csv, debugging
+     })
+
+#build the output of 1 data table, 6 figures.  
+  output$desc_stat<- renderTable({
+    summary_table() #summary descriptive statistics
+        summary_table<-read.csv("log/descriptive.csv")
+    })
+
+  #plot some dygraph output
+  output$dygraph <- renderDygraph({
+    interactive_plot <- xts(x = rt()$value, order.by = rt()$date)
+
+    dygraph(interactive_plot, main = "Hourly Concentration")   %>% 
+      dyRoller(rollPeriod = 1) %>%
+      dySeries("V1", color = "purple")%>%
+      dyAxis("y", label = input$pollutant) %>%
+      dyOptions(fillGraph = TRUE) %>%
+      dyRangeSelector(height = 30)
+  })
+
+  # renders a downloadable .csv file for the user from the selected dataset.  It includes all variables.
+  output$merged <- downloadHandler(
+    filename = function() {
+      paste("file", ".csv", sep = "")
+    },
+    content = function(file) {
+      write.csv(rt(), file, row.names = FALSE)
+    })
+  
+  
+    ##render plots one at a time, if they meet the if/then criteria determined by input$OALplot
+  output$OAL <-renderPlot({ 
+   
     
-          timeVariation(rt(), pollutant="value", name.pol = input$pollutant)
-          # %>% filter(as_date(date) >= input$dat3, as_date(date) <= input$dat4),
-   })
-   
-   output$polv = renderPlot({
-     polarPlot(rt(), pollutant = "value", upper = 20)
-   })
-   output$win = renderPlot({
-     windRose(rt(),key.footer = "knots")
-   })
-   output$cal = renderPlot({
-     calendarPlot(rt(), pollutant = "value", annotate = "value", main = "Daily averaged concentration") 
-   })
-   output$ser = renderPlot({
-     timePlot(rt(), pollutant = "value", name.pol = input$pollutant) 
-   })
-   
-   #this renders the same graphics as on-screen, but only when requested as a PDF download.
-   
-   output$plots <- downloadHandler(
-     filename = function() {
-       "Rplots.pdf"
-     },
-     content = function(file) {
-       pdf(file)
-        timeVariation(rt() %>%
-                              filter(as_date(date) >= input$dat3, as_date(date) <= input$dat4),pollutant="value")
-       
-        polarPlot(rt() %>%
-                               filter(as_date(date) >= input$dat3, as_date(date) <= input$dat4), pollutant = "value", smooth  =TRUE) 
-        windRose(rt() %>%
-                         filter(as_date(date) >= input$dat3, as_date(date) <= input$dat4),key.footer = "knots") 
-        calendarPlot(rt() %>%
-                             filter(as_date(date) >= input$dat3, as_date(date) <= input$dat4), pollutant = "value")    
-        timePlot(rt() %>%
-                         filter(as_date(date) >= input$dat3, as_date(date) <= input$dat4), pollutant = "value")  
-       dev.off()
-     }
-   )
-   
-   #this renders a downloadable .csv file for the user from the selected dataset.  It includes all variables.
-   output$merged <- downloadHandler(
-     filename = function() {
-       paste("file", ".csv", sep = "")
-     },
-     content = function(file) {
-       write.csv(rt(), file, row.names = FALSE)
-     }
-   )
+      if(input$OALplot =="polarPlot"){
+        pp <- polarPlot(rt(), pollutant = "value",  
+                  key.position = "bottom", 
+                  resolution = "normal", 
+                  cols = input$OALcolor, 
+                  statistic = input$OAL_statistic,
+                  percentile = 90,
+                  type = input$cutdata_type,
+                  force.positive = TRUE#,
+                  
+                  )
+        #limits = c(input$colorscale[1], input$colorscale[2])
+        
+          #experiemental code to allow user to dynamically set color scale limits and replot.  
+        
+        # polarscale<-reactive({ #nested reactive to set hi/low scale colors into variables, which are called in the sliderinputs for plot.
+        #   pp_low<<-pp$plot$legend$right$args$key$at[1]#pp$plot$panel.args.common$at[1]
+        #   pp_hi<<-pp$plot$legend$right$args$key$at[200]#pp$plot$panel.args.common$at[17]
+        #             })
+        # #polarscale()
+        #   print(pp$plot$legend$right$args$key$at[200]) #debug
+        #   print(pp_hi)
+        #   print(pp$plot$plot$legend$right$args$key$at[1])
+        #   print(pp_low)#debug
+          # print(pp_low)
+          # print(pp_hi)
+          # print(polarscale())
+          
+          pp$plot + layer(ltext #build polar plot, add watermark
+                          (x = -8, y = -10, 
+                            labels = "Open Air Local", 
+                            col = "darkgrey", alpha = 0.7, cex = 2))
+      }
+    
+        else if(input$OALplot == "timeVariation"){
+          tv<-timeVariation(rt(), pollutant = "value", 
+                        name.pol = input$pollutant, 
+                        cols = input$OALcolor, 
+                        type = input$cutdata_type,
+                        statistic = input$OAL_statistic,
+                        main = "Generated using Open Air Local")
+           tv_plot<-tv$main.plot()
+                         }
+    
+          else if(input$OALplot =="calendarPlot"){
+            cp<-calendarPlot(rt(), pollutant = "value", 
+                         annotate = "value", 
+                         main = "Daily averaged concentration", 
+                         cols =input$OALcolor,
+                         statistic = input$OAL_statistic)
+            cp$plot + layer(ltext #build calendarPlot, add watermark
+                       (x = 4, y = 1,
+                         labels = "Open Air Local",
+                         col = "darkgrey", alpha = 0.7, cex = 1.2))
+                        }
+      
+            else if(input$OALplot=="windRose"){
+              wr<-windRose(rt(), key.footer = "knots", 
+                       type = input$cutdata_type,
+                       angle = input$spokeangle,
+                       ws.int = as.numeric(input$setinterval)
+              )
+              wr$plot + layer(ltext #build windrose plot, add watermark
+                         (x = 0, y = -50, 
+                           labels = "Open Air Local", 
+                           col = "darkgrey", alpha = 0.7, cex = 2))
+              }
+    }, height = 750)
+ 
+    
+    #build all settings panels for each type of graphical output.
+  
+    output$OALsettings <-renderUI({
+           if(input$OALplot =="polarPlot"){
+              fluidRow(
+          h3("Polar Plot"),
+          p("A polar plot indicates, by color, concentration dependency based on wind direction (direction of compass), and wind speed (radial distance from origin
+          )"),
+  
+          radioButtons("OALcolor",
+                            h4("Choose a color"),
+                              choices =  c("Default" = "default",
+                              "Jet" = "jet",
+                              "Heat" = "heat",
+                              "Grey scale" = "greyscale"),
+                            selected = "default", inline = TRUE),
+                 selectizeInput("cutdata_type", h4("Plot data across different time periods?"),
+                                c("All Data " = "default",
+                                  "Seasonal" = "season",
+                                  "Annual" = "year")),
+          
+                 selectizeInput("OAL_statistic", h4("Statistic to be reported"),
+                                c("Mean " = "mean",
+                                  "Median" = "median",
+                               "Conditional Probability Function (at 90%)" = "cpf"))#,
+                                )
+                                    }
+      
+      else if(input$OALplot == "timeVariation"){
+        fluidRow(
+          h3("Time Variation Plot"),
+          p("This averages, and then plots, your data across a variety of time frames - hour of day, day of week, month of year, etc
+          "),
+                radioButtons("OALcolor", 
+                          h4("Choose a color"), 
+                          choices = list("Red" = "darkred",
+                                   "Blue" = "darkblue",
+                                   "Green" = "darkgreen",
+                                   "Grey scale" = "black"),
+                              selected = "default", inline = TRUE),
+                 selectizeInput("cutdata_type", "Plot data across different time periods?",
+                                c("All Data " = "default",
+                                  "Seasonal" = "season",
+                                  "Annual" = "year")),
+                                selectizeInput("OAL_statistic", h4("Statistic to be reported"),
+                                               c("Mean " = "mean",
+                                                 "Median" = "median"))
+        )
+       }
+      else if(input$OALplot =="calendarPlot"){
+             fluidRow(
+          h3("Calendar Plot"),
+          p("This shows you data that is aggregated to daily averages across the entire timeframe of your data selection
+          "),
+          
+          radioButtons("OALcolor", 
+                              h4("Choose a color"), 
+                              choices = list("Default" = "default",
+                                             "Jet" = "jet",
+                                             "Heat" = "heat",
+                                             "Grey scale" = "greyscale"),
+                              selected = "default", inline = TRUE),
+          selectizeInput("OAL_statistic", h4("Statistic to be reported"),
+                                c("Mean " = "mean",
+                                  "Median" = "median")
+                         ))
+        }
+      
+      else if(input$OALplot=="windRose"){
+          fluidRow(
+          h3("Wind Rose"),
+          p("A wind rose simply shows you which direction, and at which speed, the wind blows at your location
+            "),
+             sliderInput("spokeangle", "Adjust number of bins? Set angle here:",
+                      min = 5,
+                      max = 45,
+                      value = 30),
+          selectizeInput("setinterval", h4("Adjust the Windspeed Interval"),
+                      c("1 m/s" = "1",
+                        "2 m/s" = "2",
+                        "5 m/s" = "5",
+                        "10 m/s" = "10"), selected = 2)
+        )
+        }
+      
+    })
     
 })
-
-
