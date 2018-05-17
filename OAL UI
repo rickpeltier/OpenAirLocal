@@ -1,218 +1,262 @@
 library(leaflet)
-#library(utilr)
 library(openair)
 library(dplyr)
-library(ggplot2)
 library(shiny)
-#library(gissr)
-library(ropenaq)
 library(worldmet)
 library(lubridate)
 library(shinythemes)
-#options(shiny.sanitize.errors = FALSE)
+library(dygraphs)
+library(xts)
+library(shinydashboard)
 
+options(shiny.sanitize.errors = FALSE)
 
-navbarPage(theme = shinytheme("readable"), "OpenAirLocal",
-           
-           
-           tabPanel("Instructions",
-                    fluidRow(
-                      column(4, wellPanel(
-                      img(src = "air.png", height = 240, width = 360))),
-                      #),
-                     
-                       tags$head(includeScript("google-analytics.js")),
-                      
-                      column(8,
-                      wellPanel(
-                        h2("Instructions"),          
-                        
-                        br(),
-                        h4("Start by navigating to the 'Select Inputs' tab (near the top of the page), and choose your pollutant.  Then, select 
-your location of interest and your select a start and stop time for your data.  
-Press 'SUBMIT' and then navigate to the 'Outputs' tab where you will find your processed data; 
-it may take several seconds to generate your analysis. You may now download the graphical 
-output as a .pdf file, and/or download the dataset that you selected."),
-                        
-                      
-                      
-
-br(),
-h2("Background"),
-p("This is the advanced users version of OpenAir Local, which allows you to download both the graphical output and the raw data.
-  Users are instructed to enter data on the tab above, which are labelled 'Select Input' (where one enters their information) 
-  and 'Outputs' (where one retrieves their analytical output)",
-  
-  br(),
-  
-  p("By using this application, you are using R statistical packages to a) retrieve air quality data, b) retrieve nearby
-    meteorology data, c) merge this data together, and d) produce selected analytical output based on your choices.  All
-    with the click of a button."),
-  
-  p("This is a particularly useful tool for quick-looks at air quality data from sites sites all over the world, and across 
-specific timeframes of interest.
-    You have the opportunity to download the raw data and perform additional analyses as you 
-wish. The downloadable dataset includes both pollutant concentrations, but also
-more detailed meteorological parameters that you might find userful.  The authors of this app 
-regret that they are unable to provide direct analytical guidance for individual data queries."),
-  
-  p("The data in this app is continuously updated, though only limited data is available for the preceeding 48-72 hours."),
-  
-  p("Please do inquire if you find significant issues related to this app or to offer suggestions for improvement.")
-  )
-                      ),
-
-
-br(),
-br(),
-h2("A few technical details"),
-p("This application makes use of a variety of R packages, which are freely downloadable.  The Shiny App itself is available in
-github.  The packages used to create this platform include:"),
-code("utilr, openair, dplyr, ggplot2, shiny, gissr, ropenaq, worldmet,lubridate, and leaflet"),
-br(),
-br(), 
-em("We are very grateful to our colleagues at OpenAQ.org for providing access to their data"),
-br(),
-br(),
-br(),
-strong ("Users agree to use this platform solely at their own risk, and the authors of this software will have no liability for the validity of this data, or of any secondary or derived output arising from this data")
-                    
-
-
-)
-                    )
-                    ),
-           tabPanel("1) Select Inputs",
-                    fluidRow(
-                      column(4, wellPanel(
+  navbarPage(
+    theme = shinytheme("flatly"), "OpenAirLocal", id="inTabset",
     
-                      uiOutput("pollutant"),
-                      
-                      helpText("Choose a pollutant from the dropdown list.  This will update the world map to the right that will list available sites 
+  tabPanel(  ##first tab, main landing page
+    "Instructions",
+    fluidRow(
+      box(wellPanel(
+        img(src = "air.png", height = 240, width = 360))
+        , width = 3
+      ),
+    
+       box(wellPanel(
+          h2("Instructions"),
+
+          br(),
+          h4("Start by navigating to the 'Select Inputs' tab (near the top of the page)."),
+          h4("1) Choose your pollutant."),
+          h4("2) Select your location of interest."),
+          h4("3) Select a start and stop time for your data."),
+          h4("4) Press the submit button."),
+          br()
+          )
+         ), width = 9
+                ),
+    
+   br(),
+   br(),
+   br(),
+   br(),
+   br(),
+   br(),
+   br(),
+   br(),
+  fluidRow(
+    wellPanel(
+      shiny::hr(),
+      em(
+        span("Created by "),
+        a("Professor Rick Peltier", href = "mailto:rpeltier@umass.edu"),
+        span("of the University of Massachusetts Amherst, USA, May 2018")
+        )
+      ),
+        br(), br()
+    )
+  ),    
+    
+    
+  tabPanel("More Information",  #second tab with more information on the app background
+           fluidRow(
+             wellPanel(
+               h2("A Little Background"),
+               p(
+                 "This is the advanced users version of OpenAir Local, which allows you to download both the graphical output and the raw data.
+                 Users are instructed to enter data on the tab above, which are labelled 'Select Input' (where one enters their information) 
+                 and 'Outputs' (where one retrieves their analytical output)"),
+               
+               br(),
+               
+               p("By using this application, you are using R statistical packages to a) retrieve air quality data, b) retrieve nearby
+                 meteorology data, c) merge this data together, and d) produce selected analytical output based on your choices.  All
+                 with the click of a button."),
+               
+               p("This is a particularly useful tool for quick-looks at air quality data from sites sites all over the world, and across 
+                 specific timeframes of interest.  It offers more than a simple database front end, because it provides both analysis and the data you request.
+                 You have the opportunity to download the raw data and perform additional analyses as you 
+                 wish. The downloadable dataset includes both pollutant concentrations, but also
+                 more detailed meteorological parameters that you might find userful.  The authors of this app 
+                 regret that they are unable to provide direct analytical guidance for individual data queries."),
+               
+               p("The data in this app is continuously updated, though only limited data is available for the preceeding 48-72 hours.
+                 Occasionally, no meteorology data is available for a particular location and this results in null results.  We are 
+                 actively tracking these locations and will update the app as it develops."),
+               
+               p("Please do inquire if you find significant issues related to this app or to offer suggestions for improvement. There may be some sites in which 
+                 erroneous data (such as negative or repeating values) are included in the analysis.  No effort has been made to quality assure the data, 
+                 and we ask that you perform these data tidying activities within your own analysis.")
+               )
+               ),
+           
+           fluidRow(
+             wellPanel(
+               h2("The Technical Bits"),
+               p("This application makes use of a variety of R packages, which are freely downloadable.  The Shiny App itself will be available in
+                 github.  The packages used to create this platform include:"),
+               code("leaflet, openair, dplyr, shiny & shinydashboard, worldmet, lubridate, dygraphs, xts, and ropenaq"),
+               br(),
+               br(),
+               p("Air quality data is mirrored from OpenAQ and stored locally in a SQLite database.  Meterology data is downloaded on demand from the NOAA ISD
+                 database of meteorology records"),
+               em("We are very grateful to our colleagues at OpenAQ.org for providing access to their data"),
+               br(),
+               p("Almost no data quality assurance is provided in this dataset.  However, we do replace any concentration value that is less than -10 with
+                 a NaN value; this effectively removes -999 data, which is a common flag for missing data."),
+               br(),
+               strong("Users agree to use this platform solely at their own risk, and the authors of this software will have no liability for the validity of this data, or of any secondary or derived output arising from this data")
+               )
+               )
+               ),
+          
+  tabPanel(  #tab to select inputs
+    "1) Select Inputs",
+    fluidRow(
+      column(
+        4, wellPanel(
+          uiOutput("pollutant"),
+
+          helpText("Choose a pollutant from the dropdown list.  This will update the world map to the right that will list available sites 
 that measure the pollutant you selected.  Please note that not all pollutants are available at all sites, and that some pollutants are not 
 measured continuously and may not be available.")
-                    ),
-                    
-                      tags$style(type="text/css",
-                                 ".shiny-output-error { visibility: hidden; }",
-                                 ".shiny-output-error:before { visibility: hidden; }"
-                      )),
-                      column(8,wellPanel(
-                        
-                        leafletOutput("map"),
-                                helpText("Zoom in to select your location.")       ))),
-                    fluidRow(
-                 
-                      
-                      
-                      tags$style(type="text/css",
-                                 ".shiny-output-error { visibility: hidden; }",
-                                 ".shiny-output-error:before { visibility: hidden; }"
-                      ),
-                      wellPanel(uiOutput("dt3"),
-                                
-                                uiOutput("dt4"),
-                                
-                                #############################
-                                #Action button go allows user to make selections prior to data transfer.  Map inputs are reactive to the pollutant
-                                #choices (e.g. select a different pollutant, and map updates).  After date selection, user presses action button
-                                #which initiates data retrieval, merging, and plotting routines.
-                                
-                                
-                                actionButton("go", "Submit"),
-                                ##############################
-                                
-                                helpText("Please choose a date Range for your data.  Refer to map popup to see if data is available within the timeframe you choose."),
-                                conditionalPanel(condition="$('html').hasClass('shiny-busy')",
-                                                 tags$div("Loading...",id="loadmessage")
-                                 )
+        ),
 
-
-                                )
-
-                    )
-                   
-                    
-
-                    
-                    
-                    
-                   
-                             ),
-           tabPanel("2) Output"
-                   ,tags$style(type="text/css", "
+        tags$style(
+          type = "text/css",
+          ".shiny-output-error { visibility: hidden; }",
+          ".shiny-output-error:before { visibility: hidden; }"
+        ),
+    
+       
+        wellPanel(
+          
+          h4("Your selected location is:"), 
+          uiOutput("userlocationchoice"),
+          hr(),
+          uiOutput("timeshift"), ###experimental feature to allow user to shift time to local
+          uiOutput("dt3"),
+          uiOutput("dt4"),
+          
+          
+          actionButton("go", "Submit"),
+          ##############################
+          
+          
+          helpText("Please choose a date range for your data")),
+          conditionalPanel(
+            condition = "$('html').hasClass('shiny-busy')",
+            tags$div("Loading...", id = "loadmessage")
+          )
+        ),
+    
+      column(8, wellPanel(
+        leafletOutput("map"),
+        helpText("Zoom in to select your location.")
+      ))
+    )),
+    fluidRow(
+      tags$style(
+        type = "text/css",
+        ".shiny-output-error { visibility: hidden; }",
+        ".shiny-output-error:before { visibility: hidden; }"
+      )
+      
+  ),
+  tabPanel(  ##output tab, including rendered plots
+    "2) Output", value = "Output_panel"  #'please wait' message while shiny works
+    , tags$style(type = "text/css", "
            #loadmessage {
                                position: fixed;
-                               top: 100px;
+                               top: 200px;
                                left: 0px;
                                width: 100%;
                                padding: 5px 0px 5px 0px;
                                text-align: center;
                                font-weight: bold;
                                font-size: 100%;
-                               color: #000000;
-                               background-color: #CCFF66;
+                               color: #FDFEFE;
+                               background-color: #5DADE2;
                                z-index: 105;
                                }
                                "),
-                   conditionalPanel(condition="$('html').hasClass('shiny-busy')",
-                                    tags$div("Loading...plots take up to 20 seconds to produce) ",id="loadmessage")
-                   ),
-                   
-                   #############################
-                   
-                   verbatimTextOutput("debug"),
-                   ############################# 
-                   
-                   
-                   fluidRow(
-                      
-              
-                      
-                      
-                      
-                      wellPanel(uiOutput("pol"))
-                    ),
-                   fluidRow(
-                     wellPanel(
-                     downloadButton(outputId = "plots", label = "Download the plots"),
-                     
-                     helpText("Press download if you wish to download the graphical output in pdf format."),
-                     
-                     downloadButton("merged", "Download your data as a CSV file"),
-                     helpText("Click here to download all of your selected data (including meteorology) in .csv format.")
-                     )
-                   ),
-                    fluidRow(column(8, plotOutput("tim")),
-                             column(4,plotOutput("polv"))),
-                    hr(),
-                    
-                    fluidRow(column(4, plotOutput("win")),
-                             column(8,plotOutput("cal"))),
-                    hr(),
-                    fluidRow(column(12, plotOutput("ser"))
-                             
-                             #####################
-# 
-#                                       hr(),
-# 
-#                              fluidRow(column(12, tableOutput("summ")))
-#                              
-                             #####################
-                             
+    ###################
+    
+      #,
+      
+      tags$head(includeScript("google-analytics.js")), #point to google analytics
+           
+    
+    ###################
+    
+    conditionalPanel(
+      condition = "$('html').hasClass('shiny-busy')",
+      tags$div("Breathe easy...plots take up to 20 seconds (or more) to produce! ", id = "loadmessage")
+    ),
 
-                    )
-                    
-                    )
-           
-           
+   
+ 
+#build the output dashboard
+    fluidRow(
+      wellPanel(uiOutput("pol")) #this is the descriptive header text
+    ),
+
+fluidRow(
+  box(tableOutput('desc_stat'), width = 12, title = "Basic Descriptive Statistics")
+),
+
+br(),
+
+    fluidRow(
+      box(wellPanel(
+      
+        downloadButton("merged", "Download Data"),
+        helpText("Click here to download all of your selected data (including meteorology) in .csv format."),
+        br(),
+        br(),
+        br(),
+        br()
+       ), 
+        width = 2, title = "Download .CSV"),
+      
+      
+      
+      
+      box(wellPanel(
+        dygraphOutput("dygraph"))
+          , width = 10, title = "Interactive Time Series", ylab = "Pollutant Concentration",
+        helpText("Use your mouse to zoom in/out.  You may also select an averaging period in the very small box on the lower left corner of graph
+                       which represents the number of hours to average (e.g. '24' for a 24-hour average)"))),
+    
+hr(),
+
+
+fluidRow( #build the user-customizable graph outputs
+  column(selectInput("OALplot", 
+                      h3("Select your advanced plot"), 
+                      c("Polar Plot" = "polarPlot", 
+                        "Time Variation plot" = "timeVariation", 
+                        "Calendar Plot" = "calendarPlot",
+                        "Wind Rose Plot" = "windRose"), 
+                      selected = NULL),
+         
+         
+         
+    wellPanel(uiOutput("OALsettings")), width = 3),
+  column(wellPanel(plotOutput("OAL")), width = 9)),
+  
+fluidRow(box( #output message with contact information.
+  
+  h4("Output not what you expected?"),
+  p("First, make sure you click on a location on the previous tab.  If this doesn't resolve the issue, it is possible 
+    that no nearby meteorology data is available for your selection.  We are actively working on identifying these locations and will continuously improve
+    this application."),
+  h5(em("Should you have any questions or comments, please send them to the author of this application, Rick Peltier, at rpeltier@umass.edu"))
+  , width = 3)),
+br(),
+br()
+
+)
 )
 
 
-
-  
-  
-  
-  
-  
-  
