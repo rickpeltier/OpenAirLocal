@@ -1,22 +1,24 @@
 
-# function to find nearest met site 
 library(worldmet)
 library(dplyr)
 library(purrr)
 library(tidyverse)
 library(ropenaq)
 
-# read locations - fix numeric
-#locations <- read.csv("locations.csv", stringsAsFactors = FALSE)
-#locations<-read_rds("C:/Users/rpeltier/Desktop/Upwork Drafts/locations.RDS") 
-#remove(locations)
+#this script a) creates a list of all openAQ sites, b) creates a list of all NOAA ISD sites,, c) removes known bad ISD sites, d) identify and appends
+#the nearest valid ISD site to the openAQ site and appends this to df.
+
 locations<-aq_locations()
 
 locations$latitude <- as.numeric(locations$latitude)
 locations$longitude <- as.numeric(locations$longitude)
 
+
 # get locations of met sites
 meta <- getMeta(returnMap = FALSE, plot = FALSE)
+
+id <- which(meta$code %in% bad_site_list$X2) #list row numbers in meta where bad ISD sites are
+meta <- meta[-id, ] #delete bad sites from meta
 
 ## approximate distance to site using Great Circle distances
 
@@ -32,9 +34,9 @@ findDist <- function(lat, lon) {
     meta$dist <- acos(sin(LAT) * sin(meta$latR) + cos(LAT) * 
                         cos(meta$latR) * cos(meta$longR - LON)) * r
     
-    ## sort and retrun top n nearest
-    meta <- head(openair:::sortDataFrame(meta, key = "dist"), 1)
-  
+    ## sort and return top n nearest
+        meta <- head(openair:::sortDataFrame(meta, key = "dist"), 1)
+    
     result <- select(meta, code = code, distance = dist, station = STATION)
     
   } else {
@@ -46,8 +48,9 @@ findDist <- function(lat, lon) {
 # go through AQ sites
 nearest <- map2_dfr(locations$latitude, locations$longitude, findDist)
 locations <- bind_cols(locations, nearest)
-#locations$location <- gsub( " " , "+" , locations$location)
-locations$distance<-round(locations$distance, 2)
+
+locations$distance<-round(locations$distance1, 2) #round distance to two places for readability
+
 saveRDS(locations,"~/OAL/locations.RDS")
 remove('meta')
 remove('nearest')
